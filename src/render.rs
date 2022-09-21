@@ -38,6 +38,9 @@ impl RenderManager {
         renderer.set_bounds(width, height)?;
         Ok(renderer)
     }
+    pub fn device_to_user(&self, x: f64, y: f64) -> (f64, f64) {
+        self.cairo_context.device_to_user(x,y).unwrap()
+    }
     pub fn set_bounds(&mut self, width: u32, height: u32) -> Result<(), String> {
         self.stride = self
             .format
@@ -130,15 +133,12 @@ impl RenderManager {
             .user_to_device_distance(rect.width, rect.height)
             .unwrap();
         info!("dx, dy: {}, {}", dx, dy);
-        if rect.x >= 0.0
-            && rect.y >= 0.0
-            && rect.x < 1.0
-            && rect.y < 1.0
-            && dx >= 1.0
-            && dy >= 1.0
-        {
-            self.active_region = rect;
-        }
+        self.active_region = cairo::Rectangle {
+            x: f64::max(0.0, rect.x),
+            y: f64::max(0.0, rect.y),
+            height: f64::min(1.0, rect.height),
+            width: f64::min(1.0, rect.width),
+        };
     }
     pub fn get_active_region(&self) -> cairo::Rectangle {
         self.active_region

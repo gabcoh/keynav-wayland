@@ -24,6 +24,7 @@ use crate::render::RenderManager;
 // app.data
 struct App {
     config: Config,
+    pointer_pos: (i32, i32),
     keyboard_state: Option<xkb::State>,
     should_exit: bool,
     renderer: Rc<RefCell<RenderManager>>,
@@ -68,8 +69,6 @@ impl App {
                 | zwlr_layer_surface_v1::Anchor::Left
                 | zwlr_layer_surface_v1::Anchor::Right,
         );
-        let region = compositor.create_region();
-        surface.set_input_region(Some(&region));
 
         layer_surface.set_exclusive_zone(-1);
         layer_surface
@@ -99,6 +98,7 @@ impl App {
         let app = Rc::new(RefCell::new(App {
             config,
             keyboard_state: None,
+            pointer_pos: (0, 0),
             should_exit: false,
             renderer,
             surface,
@@ -137,6 +137,7 @@ impl App {
                 .expect("Compositor should support virtual pointer");
             let app = app.clone();
             let mut keyboard_created = false;
+            let mut pointer_created = false;
             globals
                 .instantiate_exact::<wl_seat::WlSeat>(1)
                 .unwrap()
@@ -148,7 +149,29 @@ impl App {
 
                     let virtual_pointer =
                         virtual_pointer_manager.create_virtual_pointer(Some(&seat));
+                    let region = compositor.create_region();
                     let app = app.clone();
+                    if let SeatEvent::Capabilities { capabilities } = event {
+                        if !pointer_created && capabilities.contains(Capability::Pointer) {
+                            let app = app.clone();
+                            pointer_created = true;
+                            seat.get_pointer().quick_assign(
+                                move |_pointer, event, _| match event {
+                                    wl_pointer::Event::Enter {
+                                        surface_x,
+                                        surface_y,
+                                        ..
+                                    } => {
+                                        info!("Pointer entered at {}, {}", surface_x, surface_y);
+                                        let mut app = app.borrow_mut();
+                                        app.surface.set_input_region(Some(&region));
+                                        app.pointer_pos = (surface_x as i32, surface_y as i32);
+                                    }
+                                    _ => {}
+                                },
+                            );
+                        };
+                    }
                     if let SeatEvent::Capabilities { capabilities } = event {
                         if !keyboard_created && capabilities.contains(Capability::Keyboard) {
                             // create the keyboard only once
@@ -232,6 +255,20 @@ impl App {
         virtual_pointer.frame();
         virtual_pointer.button(0, 272, wl_pointer::ButtonState::Released);
         virtual_pointer.frame();
+    }
+    pub fn center_cursor(&mut self) {
+        let mut renderer = self.renderer.borrow_mut();
+        let (pointer_surface_x, pointer_surface_y) = self.pointer_pos;
+        let pointer_relative_x = (pointer_surface_x as f64) / (renderer.get_width() as f64);
+        let pointer_relative_y = (pointer_surface_y as f64) / (renderer.get_height() as f64);
+
+        let (width, height) = renderer.device_to_user(100.0, 100.0);
+        renderer.update_active_region(cairo::Rectangle {
+            x: pointer_relative_x - width / 2.0,
+            y: pointer_relative_y - height / 2.0,
+            height: height,
+            width: width,
+        });
     }
     pub fn narrow_left(&mut self) {
         let rect = self.renderer.borrow().get_active_region();
@@ -410,6 +447,10 @@ impl App {
                     match mappings.get(&key) {
                         Some(actions) => {
                             actions.iter().for_each(|action| match action {
+                                KeynavAction::CenterCursor => {
+                                    info!("Executing CenterCursor action");
+                                    self.center_cursor();
+                                }
                                 KeynavAction::NarrowRight => {
                                     info!("Executing NarrowRight action");
                                     self.narrow_right();
