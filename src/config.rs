@@ -98,7 +98,7 @@ fn parse_config(contents: String) -> Result<Config, String> {
 
     Ok(Config { mappings })
 }
-fn parse_config_file(config: &mut File) -> Result<Config, String> {
+pub fn parse_config_file(config: &mut File) -> Result<Config, String> {
     let mut contents = String::new();
     config
         .read_to_string(&mut contents)
