@@ -1,6 +1,8 @@
 # keynav-wayland
 keynav-wayland is an implementation of
-[keynav](https://www.semicomplete.com/projects/keynav/) for wayland!
+[keynav](https://www.semicomplete.com/projects/keynav/) for wayland! Right now
+it is not directly compatible with existing keynavrc, but compatibility and more
+documentation should be coming soon!
 
 It works, and is already useful for me at least, but still has some work to be
 done. Please use it and let me know what you think.
