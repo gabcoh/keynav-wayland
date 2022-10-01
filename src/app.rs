@@ -403,6 +403,129 @@ impl App {
                 width: rect.width,
             });
     }
+    fn handle_keymap(&mut self, keymap: xkb::Keymap) {
+        self.keyboard_state = Some(xkb::State::new(&keymap));
+        // TODO: temporary, remove this
+        let mut mappings = HashMap::<(xkb::ModMask, xkb::Keysym), Vec<KeynavAction>>::new();
+        for (key, val) in self
+            .config
+            .clone()
+            .right()
+            .expect("config should be RawConfig before keymap is recieved")
+            .mappings
+        {
+            let mut modmask = 0;
+            // TODO: This will not give good errors if for example a mapping
+            // has two keysyms and the last one is invalid. Also, the whole
+            // error handling story here is generally bad. To much
+            // validation, not enough parsing... Should fix whenever I get
+            // around to cleaning up this code
+
+            // Also, seems like this is a good place to note that the whole
+            // reasons that I am going to thte trouble of dealing with key
+            // mappings in what seems like an overly complicated way is so
+            // that I can be as general as possible and respect weird
+            // keymappings.
+            let mut keysym = xkb::KEY_NoSymbol;
+            for component in &key {
+                let maybe_modindex = keymap.mod_get_index(component);
+                if maybe_modindex != xkb::MOD_INVALID {
+                    modmask |= 1 << maybe_modindex;
+                    trace!(
+                        "Key, index, mask: {}, {}, {}",
+                        component,
+                        maybe_modindex,
+                        modmask
+                    );
+                } else if keysym != xkb::KEY_NoSymbol {
+                    panic!(
+                        "Got normal key {} when mapping already had normal key",
+                        component
+                    );
+                } else {
+                    trace!("Normal key: {}", component);
+                    keysym = xkb::keysym_from_name(&component, xkb::KEYSYM_NO_FLAGS);
+                    if keysym == xkb::KEY_NoSymbol {
+                        panic!("Key not mapped");
+                    }
+                }
+            }
+            if keysym == xkb::KEY_NoSymbol {
+                // TODO: Give more helpful error (maybe propogate line
+                // numbers down to here or something)
+                panic!("No keysym found in mapping: {:?}", key);
+            }
+            trace!("Key, mask: {}, {}", keysym, modmask);
+            mappings.insert((modmask, keysym), val.clone());
+        }
+        self.config = Left(Config { mappings });
+    }
+
+    fn execute_action(
+        &mut self,
+        action: &KeynavAction,
+        virtual_pointer: &Main<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
+    ) {
+        match action.clone() {
+            KeynavAction::CursorZoom { width, height } => {
+                trace!("Executing CenterCursor action");
+                self.cursor_zoom(width, height);
+            }
+            KeynavAction::CutRight(x) => {
+                trace!("Executing CutRight action");
+                self.cut_right(x.unwrap_or(0.5));
+            }
+            KeynavAction::CutLeft(x) => {
+                trace!("Executing CutLeft action");
+                self.cut_left(x.unwrap_or(0.5));
+            }
+            KeynavAction::CutUp(x) => {
+                trace!("Executing CutUp action");
+                self.cut_up(x.unwrap_or(0.5));
+            }
+            KeynavAction::CutDown(x) => {
+                trace!("Executing CutDown action");
+                self.cut_down(x.unwrap_or(0.5));
+            }
+            KeynavAction::MoveRight(x) => {
+                trace!("Executing MoveRight action");
+                self.move_right(x.unwrap_or(1.0));
+            }
+            KeynavAction::MoveLeft(x) => {
+                trace!("Executing MoveLeft action");
+                self.move_left(x.unwrap_or(1.0));
+            }
+            KeynavAction::MoveUp(x) => {
+                trace!("Executing MoveUp action");
+                self.move_up(x.unwrap_or(1.0));
+            }
+            KeynavAction::MoveDown(x) => {
+                trace!("Executing MoveDown action");
+                self.move_down(x.unwrap_or(1.0));
+            }
+            KeynavAction::Click(x) => {
+                trace!("Executing click action");
+                self.click(&virtual_pointer, x.unwrap_or(MouseButton::Left).to_code());
+            }
+            KeynavAction::DragButton(x) => {
+                trace!("Executing drag button action");
+                self.drag(&virtual_pointer, x.to_code());
+            }
+            KeynavAction::DoubleClick(x) => {
+                trace!("Executing double click action");
+                self.double_click(&virtual_pointer, x.unwrap_or(MouseButton::Left).to_code());
+            }
+            KeynavAction::Warp => {
+                trace!("Executing warp action");
+                self.warp(&virtual_pointer);
+            }
+            KeynavAction::End => {
+                trace!("Executing end action");
+                self.end();
+            }
+        }
+    }
+
     pub fn handle_keyboard_event(
         &mut self,
         virtual_pointer: &Main<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
@@ -423,68 +546,7 @@ impl App {
                             )
                         };
                         match maybe_keymap_or_err {
-                            Ok(Some(keymap)) => {
-                                self.keyboard_state = Some(xkb::State::new(&keymap));
-                                // TODO: temporary, remove this
-                                let mut mappings =
-                                    HashMap::<(xkb::ModMask, xkb::Keysym), Vec<KeynavAction>>::new(
-                                    );
-                                for (key, val) in self
-                                    .config
-                                    .clone()
-                                    .right()
-                                    .expect("config should be RawConfig before keymap is recieved")
-                                    .mappings
-                                {
-                                    let mut modmask = 0;
-                                    // TODO: This will not give good errors if
-                                    // for example a mapping has two keysyms and
-                                    // the last one is invalid. Also, the whole
-                                    // error handling story here is generally
-                                    // bad. To much validation, not enough
-                                    // parsing... Should fix whenever I get
-                                    // around to cleaning up this code
-
-                                    // Also, seems like this is a good place to
-                                    // note that the whole reasons that I am
-                                    // going to thte trouble of dealing with key
-                                    // mappings in what seems like an overly
-                                    // complicated way is so that I can be as
-                                    // general as possible and respect weird
-                                    // keymappings.
-                                    let mut keysym = xkb::KEY_NoSymbol;
-                                    for component in &key {
-                                        let maybe_modindex = keymap.mod_get_index(component);
-                                        if maybe_modindex != xkb::MOD_INVALID {
-                                            modmask |= 1 << maybe_modindex;
-                                            trace!(
-                                                "Key, index, mask: {}, {}, {}",
-                                                component, maybe_modindex, modmask
-                                            );
-                                        } else if keysym != xkb::KEY_NoSymbol {
-                                            panic!("Got normal key {} when mapping already had normal key", component);
-                                        } else {
-                                            trace!("Normal key: {}", component);
-                                            keysym = xkb::keysym_from_name(
-                                                &component,
-                                                xkb::KEYSYM_NO_FLAGS,
-                                            );
-                                            if keysym == xkb::KEY_NoSymbol {
-                                                panic!("Key not mapped");
-                                            }
-                                        }
-                                    }
-                                    if keysym == xkb::KEY_NoSymbol {
-                                        // TODO: Give more helpful error (maybe
-                                        // propogate line numbers down to here
-                                        // or something)
-                                        panic!("No keysym found in mapping: {:?}", key);
-                                    }
-                                    trace!("Key, mask: {}, {}", keysym, modmask);
-                                    mappings.insert((modmask, keysym), val.clone());
-                                }
-                                self.config = Left(Config { mappings });
-                            }
+                            Ok(Some(keymap)) => self.handle_keymap(keymap),
                             _ => {}
                         }
                     }
@@ -527,11 +589,16 @@ impl App {
                 let (modmask, key) = match self.keyboard_state.clone() {
                     Some(mut keyboard_state) => {
                         // Docs suggest getting key before updating
-                        let keysym = keyboard_state.get_keymap().key_get_syms_by_level(
-                            key + 8,
-                            keyboard_state.key_get_layout(key + 8),
-                            0,
-                        ).first().expect("there to be at least one keysym").clone();
+                        let keysym = keyboard_state
+                            .get_keymap()
+                            .key_get_syms_by_level(
+                                key + 8,
+                                keyboard_state.key_get_layout(key + 8),
+                                0,
+                            )
+                            .first()
+                            .expect("there to be at least one keysym")
+                            .clone();
                         trace!("Key maps to {}", key);
                         keyboard_state.update_key(
                             key + 8, /* wayland docs told me to? */
@@ -555,70 +622,9 @@ impl App {
                         let mappings = &mappings.clone();
                         match mappings.get(&(modmask, key)) {
                             Some(actions) => {
-                                actions.iter().for_each(|action| match action.clone() {
-                                    KeynavAction::CursorZoom { width, height } => {
-                                        trace!("Executing CenterCursor action");
-                                        self.cursor_zoom(width, height);
-                                    }
-                                    KeynavAction::CutRight(x) => {
-                                        trace!("Executing CutRight action");
-                                        self.cut_right(x.unwrap_or(0.5));
-                                    }
-                                    KeynavAction::CutLeft(x) => {
-                                        trace!("Executing CutLeft action");
-                                        self.cut_left(x.unwrap_or(0.5));
-                                    }
-                                    KeynavAction::CutUp(x) => {
-                                        trace!("Executing CutUp action");
-                                        self.cut_up(x.unwrap_or(0.5));
-                                    }
-                                    KeynavAction::CutDown(x) => {
-                                        trace!("Executing CutDown action");
-                                        self.cut_down(x.unwrap_or(0.5));
-                                    }
-                                    KeynavAction::MoveRight(x) => {
-                                        trace!("Executing MoveRight action");
-                                        self.move_right(x.unwrap_or(1.0));
-                                    }
-                                    KeynavAction::MoveLeft(x) => {
-                                        trace!("Executing MoveLeft action");
-                                        self.move_left(x.unwrap_or(1.0));
-                                    }
-                                    KeynavAction::MoveUp(x) => {
-                                        trace!("Executing MoveUp action");
-                                        self.move_up(x.unwrap_or(1.0));
-                                    }
-                                    KeynavAction::MoveDown(x) => {
-                                        trace!("Executing MoveDown action");
-                                        self.move_down(x.unwrap_or(1.0));
-                                    }
-                                    KeynavAction::Click(x) => {
-                                        trace!("Executing click action");
-                                        self.click(
-                                            &virtual_pointer,
-                                            x.unwrap_or(MouseButton::Left).to_code(),
-                                        );
-                                    }
-                                    KeynavAction::DragButton(x) => {
-                                        trace!("Executing drag button action");
-                                        self.drag(&virtual_pointer, x.to_code());
-                                    }
-                                    KeynavAction::DoubleClick(x) => {
-                                        trace!("Executing double click action");
-                                        self.double_click(
-                                            &virtual_pointer,
-                                            x.unwrap_or(MouseButton::Left).to_code(),
-                                        );
-                                    }
-                                    KeynavAction::Warp => {
-                                        trace!("Executing warp action");
-                                        self.warp(&virtual_pointer);
-                                    }
-                                    KeynavAction::End => {
-                                        trace!("Executing end action");
-                                        self.end();
-                                    }
-                                });
+                                actions
+                                    .iter()
+                                    .for_each(|action| self.execute_action(action, virtual_pointer));
                             }
                             None => {
                                 trace!("No actions associated with key")
