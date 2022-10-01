@@ -1,6 +1,8 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use either::*;
 use log::info;
 
 use wayland_client::{
@@ -16,17 +18,18 @@ use wayland_protocols::wlr::unstable::{
 
 use xkbcommon::xkb;
 
-use crate::config::{Config, KeynavAction};
+use crate::config::{Config, KeynavAction, MouseButton, RawConfig};
 use crate::render::RenderManager;
 
 // Need to separate [App.DataData] and [App.Data] so that we can borrow the event queue
 // mutably to dispatch events without simultaneously borrowing the rest of the
 // app.data
 struct App {
-    config: Config,
+    config: Either<Config, RawConfig>,
     pointer_pos: (i32, i32),
     keyboard_state: Option<xkb::State>,
-    should_exit: bool,
+    button_state: HashMap<u32, wl_pointer::ButtonState>,
+    should_end: bool,
     renderer: Rc<RefCell<RenderManager>>,
     surface: Main<wl_surface::WlSurface>,
     pool: Main<wl_shm_pool::WlShmPool>,
@@ -34,7 +37,10 @@ struct App {
 }
 
 impl App {
-    pub fn init(config: Config, event_queue: &mut EventQueue) -> Result<Rc<RefCell<Self>>, String> {
+    pub fn init(
+        config: RawConfig,
+        event_queue: &mut EventQueue,
+    ) -> Result<Rc<RefCell<Self>>, String> {
         let attached_display = (event_queue.display()).clone().attach(event_queue.token());
 
         let globals = GlobalManager::new(&attached_display);
@@ -96,10 +102,11 @@ impl App {
         );
 
         let app = Rc::new(RefCell::new(App {
-            config,
+            config: Right(config),
             keyboard_state: None,
+            button_state: HashMap::new(),
             pointer_pos: (0, 0),
-            should_exit: false,
+            should_end: false,
             renderer,
             surface,
             pool,
@@ -231,38 +238,73 @@ impl App {
         );
         self.surface.commit();
     }
-    pub fn exit(&mut self) {
-        self.should_exit = true;
+    pub fn end(&mut self) {
+        self.should_end = true;
     }
-    pub fn click(&mut self, virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1) {
+    // Returns (x, y, denominator)
+    fn get_center_as_fixed_point(&self) -> (u32, u32, u32) {
         let rect = self.renderer.borrow().get_active_region();
-        // We scale by extent because
-        // motion_absolute takes ints, but
-        // we have normalized scalar coords
-        // so we are bsaically just
-        // converting the float to a fixed
-        // point with 4 decimal places
+        // We scale by extent because motion_absolute takes ints, but we have
+        // normalized scalar coords so we are bsaically just converting the
+        // float to a fixed point with 4 decimal places
         let extent = 10000;
-        virtual_pointer.motion_absolute(
-            0,
+        (
             ((rect.x + rect.width / 2.0) * (extent as f64)) as u32,
             ((rect.y + rect.height / 2.0) * (extent as f64)) as u32,
             extent,
-            extent,
-        );
+        )
+    }
+    pub fn click(
+        &mut self,
+        virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        btn: u32,
+    ) {
+        let (x, y, extent) = self.get_center_as_fixed_point();
+        virtual_pointer.motion_absolute(0, x, y, extent, extent);
         virtual_pointer.frame();
-        virtual_pointer.button(0, 272, wl_pointer::ButtonState::Pressed);
+        virtual_pointer.button(0, btn, wl_pointer::ButtonState::Pressed);
         virtual_pointer.frame();
-        virtual_pointer.button(0, 272, wl_pointer::ButtonState::Released);
+        virtual_pointer.button(0, btn, wl_pointer::ButtonState::Released);
         virtual_pointer.frame();
     }
-    pub fn center_cursor(&mut self) {
+    pub fn drag(
+        &mut self,
+        virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        btn: u32,
+    ) {
+        let (x, y, extent) = self.get_center_as_fixed_point();
+        let state = match self.button_state.get(&btn) {
+            Some(wl_pointer::ButtonState::Pressed) => wl_pointer::ButtonState::Released,
+            Some(wl_pointer::ButtonState::Released) | None => wl_pointer::ButtonState::Pressed,
+            _ => panic!("Button state neither pressed nor releasaed"),
+        };
+        self.button_state.insert(btn, state);
+
+        virtual_pointer.motion_absolute(0, x, y, extent, extent);
+        virtual_pointer.frame();
+        virtual_pointer.button(0, btn, state);
+        virtual_pointer.frame();
+    }
+    pub fn double_click(
+        &mut self,
+        virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        btn: u32,
+    ) {
+        self.click(virtual_pointer, btn);
+        self.click(virtual_pointer, btn);
+    }
+    pub fn warp(&mut self, virtual_pointer: &zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1) {
+        let (x, y, extent) = self.get_center_as_fixed_point();
+        virtual_pointer.motion_absolute(0, x, y, extent, extent);
+        virtual_pointer.frame();
+    }
+    pub fn cursor_zoom(&mut self, width: u32, height: u32) {
         let mut renderer = self.renderer.borrow_mut();
         let (pointer_surface_x, pointer_surface_y) = self.pointer_pos;
         let pointer_relative_x = (pointer_surface_x as f64) / (renderer.get_width() as f64);
         let pointer_relative_y = (pointer_surface_y as f64) / (renderer.get_height() as f64);
 
-        let (width, height) = renderer.device_to_user(100.0, 100.0);
+        let (width, height) = renderer.device_to_user(width as f64, height as f64);
         renderer.update_active_region(cairo::Rectangle {
             x: pointer_relative_x - width / 2.0,
             y: pointer_relative_y - height / 2.0,
@@ -270,7 +312,7 @@ impl App {
             width: width,
         });
     }
-    pub fn narrow_left(&mut self) {
+    pub fn cut_left(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
@@ -278,85 +320,85 @@ impl App {
                 x: rect.x,
                 y: rect.y,
                 height: rect.height,
-                width: rect.width / 2.0,
+                width: rect.width * x,
             });
     }
-    pub fn narrow_down(&mut self) {
+    pub fn cut_down(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
                 x: rect.x,
-                y: rect.y + rect.height / 2.0,
-                height: rect.height / 2.0,
+                y: rect.y + rect.height * (1.0 - x),
+                height: rect.height * x,
                 width: rect.width,
             });
     }
 
-    pub fn narrow_up(&mut self) {
+    pub fn cut_up(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
                 x: rect.x,
                 y: rect.y,
-                height: rect.height / 2.0,
+                height: rect.height * x,
                 width: rect.width,
             });
     }
 
-    pub fn narrow_right(&mut self) {
+    pub fn cut_right(&mut self, x: f64) {
         let rect = self.renderer.borrow_mut().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
-                x: rect.x + rect.width / 2.0,
+                x: rect.x + rect.width * (1.0 - x),
                 y: rect.y,
                 height: rect.height,
-                width: rect.width / 2.0,
+                width: rect.width * x,
             });
     }
 
-    pub fn move_right(&mut self) {
+    pub fn move_right(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
-                x: rect.x + rect.width,
+                x: rect.x + rect.width * x,
                 y: rect.y,
                 height: rect.height,
                 width: rect.width,
             });
     }
-    pub fn move_left(&mut self) {
+    pub fn move_left(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
-                x: rect.x - rect.width,
+                x: rect.x - rect.width * x,
                 y: rect.y,
                 height: rect.height,
                 width: rect.width,
             });
     }
-    pub fn move_up(&mut self) {
+    pub fn move_up(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
                 x: rect.x,
-                y: rect.y - rect.height,
+                y: rect.y - rect.height * x,
                 height: rect.height,
                 width: rect.width,
             });
     }
-    pub fn move_down(&mut self) {
+    pub fn move_down(&mut self, x: f64) {
         let rect = self.renderer.borrow().get_active_region();
         self.renderer
             .borrow_mut()
             .update_active_region(cairo::Rectangle {
                 x: rect.x,
-                y: rect.y + rect.height,
+                y: rect.y + rect.height * x,
                 height: rect.height,
                 width: rect.width,
             });
@@ -383,6 +425,65 @@ impl App {
                         match maybe_keymap_or_err {
                             Ok(Some(keymap)) => {
                                 self.keyboard_state = Some(xkb::State::new(&keymap));
+                                // TODO: temporary, remove this
+                                let mut mappings =
+                                    HashMap::<(xkb::ModMask, xkb::Keysym), Vec<KeynavAction>>::new(
+                                    );
+                                for (key, val) in self
+                                    .config
+                                    .clone()
+                                    .right()
+                                    .expect("config should be RawConfig before keymap is recieved")
+                                    .mappings
+                                {
+                                    let mut modmask = 0;
+                                    // TODO: This will not give good errors if
+                                    // for example a mapping has two keysyms and
+                                    // the last one is invalid. Also, the whole
+                                    // error handling story here is generally
+                                    // bad. To much validation, not enough
+                                    // parsing... Should fix whenever I get
+                                    // around to cleaning up this code
+
+                                    // Also, seems like this is a good place to
+                                    // note that the whole reasons that I am
+                                    // going to thte trouble of dealing with key
+                                    // mappings in what seems like an overly
+                                    // complicated way is so that I can be as
+                                    // general as possible and respect weird
+                                    // keymappings.
+                                    let mut keysym = xkb::KEY_NoSymbol;
+                                    for component in &key {
+                                        let maybe_modindex = keymap.mod_get_index(component);
+                                        if maybe_modindex != xkb::MOD_INVALID {
+                                            modmask |= 1 << maybe_modindex;
+                                            info!(
+                                                "Key, index, mask: {}, {}, {}",
+                                                component, maybe_modindex, modmask
+                                            );
+                                        } else if keysym != xkb::KEY_NoSymbol {
+                                            panic!("Got normal key {} when mapping already had normal key", component);
+                                        } else {
+                                            info!("Normal key: {}", component);
+                                            keysym = xkb::keysym_from_name(
+                                                &component,
+                                                xkb::KEYSYM_NO_FLAGS,
+                                            );
+                                            if keysym == xkb::KEY_NoSymbol {
+                                                panic!("Key not mapped");
+                                            }
+                                        }
+                                    }
+                                    if keysym == xkb::KEY_NoSymbol {
+                                        // TODO: Give more helpful error (maybe
+                                        // propogate line numbers down to here
+                                        // or something)
+                                        panic!("No keysym found in mapping: {:?}", key);
+                                    }
+                                    info!("Key, mask: {}, {}", keysym, modmask);
+                                    mappings.insert((modmask, keysym), val.clone());
+                                }
+                                self.config = Left(Config { mappings });
                             }
                             _ => {}
                         }
@@ -423,10 +524,14 @@ impl App {
             wl_keyboard::Event::Key { key, state, .. } => {
                 info!("Key with id {} was {:?}.", key, state);
                 // TODO: Learn how xkbcommon actually works?
-                let key = match self.keyboard_state.clone() {
+                let (modmask, key) = match self.keyboard_state.clone() {
                     Some(mut keyboard_state) => {
                         // Docs suggest getting key before updating
-                        let key = keyboard_state.key_get_one_sym(key + 8);
+                        let keysym = keyboard_state.get_keymap().key_get_syms_by_level(
+                            key + 8,
+                            keyboard_state.key_get_layout(key + 8),
+                            0,
+                        ).first().expect("there to be at least one keysym").clone();
                         info!("Key maps to {}", key);
                         keyboard_state.update_key(
                             key + 8, /* wayland docs told me to? */
@@ -436,65 +541,88 @@ impl App {
                                 _ => panic!("THIS SHOULD BE EXHAUSTIVE"),
                             },
                         );
-                        key
+                        (
+                            keyboard_state.serialize_mods(xkb::STATE_MODS_EFFECTIVE),
+                            keysym,
+                        )
                     }
-                    None => key,
+                    None => (0, key),
                 };
-                // TODO: Handle keymap
+                info!("Modmask: {}", modmask);
                 // TODO: Maybe handle press vs relase
                 if state == wl_keyboard::KeyState::Pressed {
-                    let mappings = &self.config.mappings.clone();
-                    match mappings.get(&key) {
-                        Some(actions) => {
-                            actions.iter().for_each(|action| match action {
-                                KeynavAction::CenterCursor => {
-                                    info!("Executing CenterCursor action");
-                                    self.center_cursor();
-                                }
-                                KeynavAction::NarrowRight => {
-                                    info!("Executing NarrowRight action");
-                                    self.narrow_right();
-                                }
-                                KeynavAction::NarrowLeft => {
-                                    info!("Executing NarrowLeft action");
-                                    self.narrow_left();
-                                }
-                                KeynavAction::NarrowUp => {
-                                    info!("Executing NarrowUp action");
-                                    self.narrow_up();
-                                }
-                                KeynavAction::NarrowDown => {
-                                    info!("Executing NarrowDown action");
-                                    self.narrow_down();
-                                }
-                                KeynavAction::MoveRight => {
-                                    info!("Executing MoveRight action");
-                                    self.move_right();
-                                }
-                                KeynavAction::MoveLeft => {
-                                    info!("Executing MoveLeft action");
-                                    self.move_left();
-                                }
-                                KeynavAction::MoveUp => {
-                                    info!("Executing MoveUp action");
-                                    self.move_up();
-                                }
-                                KeynavAction::MoveDown => {
-                                    info!("Executing MoveDown action");
-                                    self.move_down();
-                                }
-                                KeynavAction::Click => {
-                                    info!("Executing click action");
-                                    self.click(&virtual_pointer);
-                                }
-                                KeynavAction::Exit => {
-                                    info!("Executing exit action");
-                                    self.exit();
-                                }
-                            });
-                        }
-                        None => {
-                            info!("No actions associated with key")
+                    if let Left(Config { mappings }) = &self.config {
+                        let mappings = &mappings.clone();
+                        match mappings.get(&(modmask, key)) {
+                            Some(actions) => {
+                                actions.iter().for_each(|action| match action.clone() {
+                                    KeynavAction::CursorZoom { width, height } => {
+                                        info!("Executing CenterCursor action");
+                                        self.cursor_zoom(width, height);
+                                    }
+                                    KeynavAction::CutRight(x) => {
+                                        info!("Executing CutRight action");
+                                        self.cut_right(x.unwrap_or(0.5));
+                                    }
+                                    KeynavAction::CutLeft(x) => {
+                                        info!("Executing CutLeft action");
+                                        self.cut_left(x.unwrap_or(0.5));
+                                    }
+                                    KeynavAction::CutUp(x) => {
+                                        info!("Executing CutUp action");
+                                        self.cut_up(x.unwrap_or(0.5));
+                                    }
+                                    KeynavAction::CutDown(x) => {
+                                        info!("Executing CutDown action");
+                                        self.cut_down(x.unwrap_or(0.5));
+                                    }
+                                    KeynavAction::MoveRight(x) => {
+                                        info!("Executing MoveRight action");
+                                        self.move_right(x.unwrap_or(1.0));
+                                    }
+                                    KeynavAction::MoveLeft(x) => {
+                                        info!("Executing MoveLeft action");
+                                        self.move_left(x.unwrap_or(1.0));
+                                    }
+                                    KeynavAction::MoveUp(x) => {
+                                        info!("Executing MoveUp action");
+                                        self.move_up(x.unwrap_or(1.0));
+                                    }
+                                    KeynavAction::MoveDown(x) => {
+                                        info!("Executing MoveDown action");
+                                        self.move_down(x.unwrap_or(1.0));
+                                    }
+                                    KeynavAction::Click(x) => {
+                                        info!("Executing click action");
+                                        self.click(
+                                            &virtual_pointer,
+                                            x.unwrap_or(MouseButton::Left).to_code(),
+                                        );
+                                    }
+                                    KeynavAction::DragButton(x) => {
+                                        info!("Executing drag button action");
+                                        self.drag(&virtual_pointer, x.to_code());
+                                    }
+                                    KeynavAction::DoubleClick(x) => {
+                                        info!("Executing double click action");
+                                        self.double_click(
+                                            &virtual_pointer,
+                                            x.unwrap_or(MouseButton::Left).to_code(),
+                                        );
+                                    }
+                                    KeynavAction::Warp => {
+                                        info!("Executing warp action");
+                                        self.warp(&virtual_pointer);
+                                    }
+                                    KeynavAction::End => {
+                                        info!("Executing end action");
+                                        self.end();
+                                    }
+                                });
+                            }
+                            None => {
+                                info!("No actions associated with key")
+                            }
                         }
                     }
                 }
@@ -511,7 +639,7 @@ pub struct AppRunner {
     event_queue: EventQueue,
 }
 impl AppRunner {
-    pub fn init(config: Config) -> Result<Self, String> {
+    pub fn init(config: RawConfig) -> Result<Self, String> {
         info!("Connecting to server");
         let display = Display::connect_to_env().unwrap();
 
@@ -528,7 +656,8 @@ impl AppRunner {
         self.event_queue
             .dispatch(&mut (), |_, _, _| { /* we ignore unfiltered messages */ })
             .unwrap();
-        if self.app.borrow().should_exit {
+        if self.app.borrow().should_end {
+            // TODO: Should I relase buttons if they are pressed here?
             self.event_queue
                 .dispatch(&mut (), |_, _, _| { /* we ignore unfiltered messages */ })
                 .unwrap();

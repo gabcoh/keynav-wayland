@@ -1,32 +1,62 @@
 # keynav-wayland
 keynav-wayland is an implementation of
-[keynav](https://www.semicomplete.com/projects/keynav/) for wayland! Right now
-it is not directly compatible with existing keynavrc, but compatibility and more
-documentation should be coming soon!
-
-It works, and is already useful for me at least, but still has some work to be
-done. Please use it and let me know what you think.
-
-*Note:* By design this app will take over your entire screen and capture
-virtually all keyboard input. The default configuration uses escape to exit the
-app, but if for some reason that does not work (ie. you broke it while
-developing) you can switch to another terminal via control+F<2,3,3,..> and kill
-keynav-wayland from there. While developing it can be useful to run this app
-with a timeout. Making it harder to for this app to lock you out is in the
-Todos.
+[keynav](https://www.semicomplete.com/projects/keynav/) for wayland!
+It may not be drop in compatible with your existing keynavrc, but it supports
+most of the core keynav commands and just requires a few slight modifications to
+how keybindings are recorded (comprehensive documentation to come).
 
 ## Usage
-Typical usage involves seting up a keybinding to start this app eg with
+Start by creating a config at `$XDG_CONFIG_HOME/keynav/keynavrc`. A good starting point is:
+```
+Escape end
+Control+bracketleft end
+h cut-left
+j cut-down
+k cut-up
+l cut-right
+Shift+h move-left
+Shift+j move-down
+Shift+k move-up
+Shift+l move-right
+space warp,click 1,end
+Return warp,click 1,end
+semicolon warp,end
+w warp
+c cursorzoom 300 300
+e end
+1 click 1
+2 click 2
+3 click 3
+Control+h cut-left
+Control+j cut-down
+Control+k cut-up
+Control+l cut-right
+y cut-left,cut-up
+u cut-right,cut-up
+b cut-left,cut-down
+n cut-right,cut-down
+Shift+y move-left,move-up
+Shift+u move-right,move-up
+Shift+b move-left,move-down
+Shift+n move-right,move-down
+Control+y cut-left,cut-up
+Control+u cut-right,cut-up
+Control+b cut-left,cut-down
+Control+n cut-right,cut-down
+```
+
+Typically you'll then want to set up a keybinding to start this app eg with
 
 ```
 bindsym Control+semicolon exec keynav-wayland
 ```
 
-in sway. The app will then present you with a rectangle enclosed cross hairs,
-which in the default configuration you can narrow with h, j, k, l, move with H,
-J, K, L, click with enter, and exit with escape.
+in sway.
 
-## Compatability
+## Build/Install
+No tricks here, just standard `cargo build` and/or `cargo install`.
+
+## Compositor Compatability
 Aside from core wayland, this app requires the [wlr layer
 shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) and [virtual
 pointer](https://wayland.app/protocols/wlr-virtual-pointer-unstable-v1)
@@ -34,13 +64,9 @@ protocols, both of which are unstable. This app should work on any wlroots based
 compositor but has only been tested on sway.
 
 ## TODO
-- [ ] improve readme
-- [ ] Make it harder to lock yourself out (eg. make unrecognized keys quit)
 - [ ] multi monitor support
-- [ ] Consult the original to see what I'm missing, consider whether going
-      config compatible is worth it
-- [ ] Add more verbs
-- [ ] Clean up code
-- [ ] Document configuration language
+- [ ] Add remaining relevant verbs from keynav (eg. macros and history)
+- [ ] Clean up code (!!!)
+- [ ] Document
 - [ ] Spread word
 - [ ] Package
