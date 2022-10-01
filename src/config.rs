@@ -102,7 +102,7 @@ impl Config {
                 None => {
                     // TODO: Give more info about where error occurs.
                     return Err("No non modifier keys found for mapping".into());
-                    }
+                }
             }
         }
         Ok(Config { mappings })
@@ -121,10 +121,22 @@ pub fn default_config() -> RawConfig {
             (vec!["j".into()], vec![KeynavAction::CutDown(None)]),
             (vec!["k".into()], vec![KeynavAction::CutUp(None)]),
             (vec!["l".into()], vec![KeynavAction::CutRight(None)]),
-            (vec!["shift".into(), "h".into()], vec![KeynavAction::MoveLeft(None)]),
-            (vec!["shift".into(), "j".into()], vec![KeynavAction::MoveDown(None)]),
-            (vec!["shift".into(), "k".into()], vec![KeynavAction::MoveUp(None)]),
-            (vec![ "shift".into(), "l".into()], vec![KeynavAction::MoveRight(None)]),
+            (
+                vec!["Shift".into(), "h".into()],
+                vec![KeynavAction::MoveLeft(None)],
+            ),
+            (
+                vec!["Shift".into(), "j".into()],
+                vec![KeynavAction::MoveDown(None)],
+            ),
+            (
+                vec!["Shift".into(), "k".into()],
+                vec![KeynavAction::MoveUp(None)],
+            ),
+            (
+                vec!["Shift".into(), "l".into()],
+                vec![KeynavAction::MoveRight(None)],
+            ),
             (
                 vec!["semicolon".into()],
                 vec![KeynavAction::CursorZoom {
@@ -133,10 +145,14 @@ pub fn default_config() -> RawConfig {
                 }],
             ),
             (
-                vec![ "return".into()],
-                vec![KeynavAction::Click(None), KeynavAction::End],
+                vec!["Return".into()],
+                vec![
+                    KeynavAction::Warp,
+                    KeynavAction::Click(Some(MouseButton::Left)),
+                    KeynavAction::End,
+                ],
             ),
-            (vec![ "escape".into()], vec![KeynavAction::End]),
+            (vec!["Escape".into()], vec![KeynavAction::End]),
         ],
     }
 }
@@ -269,23 +285,56 @@ mod test {
 h cut-left
 j cut-down
 k cut-up
-l narrow-left
+l cut-right
 
-Escape end
-Return click,end";
+Shift+h move-left
+Shift+j move-down
+Shift+k move-up
+Shift+l move-right
 
-        let expected = Ok(Config {
-            mappings: HashMap::from([
-                (KEY_h, vec![KeynavAction::CutLeft(None)]),
-                (KEY_j, vec![KeynavAction::CutDown(None)]),
-                (KEY_k, vec![KeynavAction::CutUp(None)]),
-                (KEY_l, vec![KeynavAction::CutRight(None)]),
-                (KEY_Escape, vec![KeynavAction::End]),
+semicolon cursorzoom 100 100
+Return warp, click 1,end
+Escape end";
+
+        let expected = Ok(RawConfig {
+            mappings: vec![
+                (vec!["h".into()], vec![KeynavAction::CutLeft(None)]),
+                (vec!["j".into()], vec![KeynavAction::CutDown(None)]),
+                (vec!["k".into()], vec![KeynavAction::CutUp(None)]),
+                (vec!["l".into()], vec![KeynavAction::CutRight(None)]),
                 (
-                    KEY_Return,
-                    vec![KeynavAction::Click(None), KeynavAction::End],
+                    vec!["Shift".into(), "h".into()],
+                    vec![KeynavAction::MoveLeft(None)],
                 ),
-            ]),
+                (
+                    vec!["Shift".into(), "j".into()],
+                    vec![KeynavAction::MoveDown(None)],
+                ),
+                (
+                    vec!["Shift".into(), "k".into()],
+                    vec![KeynavAction::MoveUp(None)],
+                ),
+                (
+                    vec!["Shift".into(), "l".into()],
+                    vec![KeynavAction::MoveRight(None)],
+                ),
+                (
+                    vec!["semicolon".into()],
+                    vec![KeynavAction::CursorZoom {
+                        width: 100,
+                        height: 100,
+                    }],
+                ),
+                (
+                    vec!["Return".into()],
+                    vec![
+                        KeynavAction::Warp,
+                        KeynavAction::Click(Some(MouseButton::Left)),
+                        KeynavAction::End,
+                    ],
+                ),
+                (vec!["Escape".into()], vec![KeynavAction::End]),
+            ],
         });
         assert_eq!(expected, parse_config(config.to_string()));
     }
