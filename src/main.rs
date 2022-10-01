@@ -7,7 +7,7 @@ use std::env;
 use std::fs::File;
 use std::path::Path;
 
-use log::info;
+use log::*;
 
 use keynav_wayland::app::AppRunner;
 use keynav_wayland::config::*;
@@ -25,15 +25,15 @@ fn main() {
             .and_then(|path| {
                 File::open(Path::new(&path).join(".config/keynav/keynavrc")).map_err(|err| err.to_string())
             })
-    };
+    };                          // 
 
     let config =
         match file_or_error.as_mut() {
         Ok(file) => {
-            parse_config_file(file).map_err(|err| info!("{}", err)).unwrap_or(default_config())
+            parse_config_file(file).map_err(|err| warn!("{}", err)).unwrap_or(default_config())
         }
         Err(err) => {
-            info!("{}", err);
+            warn!("Failed to read keynavrc: {}", err);
             default_config()
         }
     };

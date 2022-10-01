@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use either::*;
-use log::info;
+use log::*;
 
 use wayland_client::{
     protocol::{
@@ -49,7 +49,7 @@ impl App {
         //
         // When this returns it must be true that the server has already
         // sent us all available globals.
-        info!("Recieving globals");
+        trace!("Recieving globals");
         event_queue
             .sync_roundtrip(&mut (), |_, _, _| unreachable!())
             .unwrap();
@@ -80,10 +80,10 @@ impl App {
         layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
 
-        info!("Initial commit of surface (trigger configure)");
+        trace!("Initial commit of surface (trigger configure)");
         surface.commit();
 
-        info!("Creating renderer");
+        trace!("Creating renderer");
         let renderer: Rc<RefCell<_>> = Rc::new(RefCell::new(
             RenderManager::init(cairo::Format::ARgb32, 100, 100).unwrap(),
         ));
@@ -123,7 +123,7 @@ impl App {
                     height,
                     serial,
                 } => {
-                    info!("Configure: {}x{}", width, height);
+                    trace!("Configure: {}x{}", width, height);
                     renderer.borrow_mut().set_bounds(width, height).unwrap();
                     layer_surface.ack_configure(serial);
                     app.borrow_mut().rebind();
@@ -169,7 +169,7 @@ impl App {
                                         surface_y,
                                         ..
                                     } => {
-                                        info!("Pointer entered at {}, {}", surface_x, surface_y);
+                                        trace!("Pointer entered at {}, {}", surface_x, surface_y);
                                         let mut app = app.borrow_mut();
                                         app.surface.set_input_region(Some(&region));
                                         app.pointer_pos = (surface_x as i32, surface_y as i32);
@@ -213,7 +213,7 @@ impl App {
         Ok(app)
     }
     pub fn rebind(&mut self) {
-        info!("Rebinding");
+        trace!("Rebinding");
         self.pool
             .resize(self.renderer.borrow().get_buf_size() as i32);
         self.buffer.destroy();
@@ -227,7 +227,7 @@ impl App {
     }
 
     pub fn commit(&self) {
-        info!("Commiting");
+        trace!("Commiting");
 
         self.surface.attach(Some(&self.buffer), 0, 0);
         self.surface.damage_buffer(
@@ -410,7 +410,7 @@ impl App {
     ) {
         match event {
             wl_keyboard::Event::Keymap { format, fd, size } => {
-                info!("Got keymap");
+                trace!("Got keymap");
                 match format {
                     wl_keyboard::KeymapFormat::XkbV1 => {
                         let maybe_keymap_or_err = unsafe {
@@ -457,14 +457,14 @@ impl App {
                                         let maybe_modindex = keymap.mod_get_index(component);
                                         if maybe_modindex != xkb::MOD_INVALID {
                                             modmask |= 1 << maybe_modindex;
-                                            info!(
+                                            trace!(
                                                 "Key, index, mask: {}, {}, {}",
                                                 component, maybe_modindex, modmask
                                             );
                                         } else if keysym != xkb::KEY_NoSymbol {
                                             panic!("Got normal key {} when mapping already had normal key", component);
                                         } else {
-                                            info!("Normal key: {}", component);
+                                            trace!("Normal key: {}", component);
                                             keysym = xkb::keysym_from_name(
                                                 &component,
                                                 xkb::KEYSYM_NO_FLAGS,
@@ -480,7 +480,7 @@ impl App {
                                         // or something)
                                         panic!("No keysym found in mapping: {:?}", key);
                                     }
-                                    info!("Key, mask: {}, {}", keysym, modmask);
+                                    trace!("Key, mask: {}, {}", keysym, modmask);
                                     mappings.insert((modmask, keysym), val.clone());
                                 }
                                 self.config = Left(Config { mappings });
@@ -494,10 +494,10 @@ impl App {
                 }
             }
             wl_keyboard::Event::Enter { .. } => {
-                info!("Gained keyboard focus.");
+                trace!("Gained keyboard focus.");
             }
             wl_keyboard::Event::Leave { .. } => {
-                info!("Lost keyboard focus.");
+                trace!("Lost keyboard focus.");
             }
             wl_keyboard::Event::Modifiers {
                 mods_depressed,
@@ -522,7 +522,7 @@ impl App {
                 };
             }
             wl_keyboard::Event::Key { key, state, .. } => {
-                info!("Key with id {} was {:?}.", key, state);
+                trace!("Key with id {} was {:?}.", key, state);
                 // TODO: Learn how xkbcommon actually works?
                 let (modmask, key) = match self.keyboard_state.clone() {
                     Some(mut keyboard_state) => {
@@ -532,7 +532,7 @@ impl App {
                             keyboard_state.key_get_layout(key + 8),
                             0,
                         ).first().expect("there to be at least one keysym").clone();
-                        info!("Key maps to {}", key);
+                        trace!("Key maps to {}", key);
                         keyboard_state.update_key(
                             key + 8, /* wayland docs told me to? */
                             match state {
@@ -548,7 +548,7 @@ impl App {
                     }
                     None => (0, key),
                 };
-                info!("Modmask: {}", modmask);
+                trace!("Modmask: {}", modmask);
                 // TODO: Maybe handle press vs relase
                 if state == wl_keyboard::KeyState::Pressed {
                     if let Left(Config { mappings }) = &self.config {
@@ -557,71 +557,71 @@ impl App {
                             Some(actions) => {
                                 actions.iter().for_each(|action| match action.clone() {
                                     KeynavAction::CursorZoom { width, height } => {
-                                        info!("Executing CenterCursor action");
+                                        trace!("Executing CenterCursor action");
                                         self.cursor_zoom(width, height);
                                     }
                                     KeynavAction::CutRight(x) => {
-                                        info!("Executing CutRight action");
+                                        trace!("Executing CutRight action");
                                         self.cut_right(x.unwrap_or(0.5));
                                     }
                                     KeynavAction::CutLeft(x) => {
-                                        info!("Executing CutLeft action");
+                                        trace!("Executing CutLeft action");
                                         self.cut_left(x.unwrap_or(0.5));
                                     }
                                     KeynavAction::CutUp(x) => {
-                                        info!("Executing CutUp action");
+                                        trace!("Executing CutUp action");
                                         self.cut_up(x.unwrap_or(0.5));
                                     }
                                     KeynavAction::CutDown(x) => {
-                                        info!("Executing CutDown action");
+                                        trace!("Executing CutDown action");
                                         self.cut_down(x.unwrap_or(0.5));
                                     }
                                     KeynavAction::MoveRight(x) => {
-                                        info!("Executing MoveRight action");
+                                        trace!("Executing MoveRight action");
                                         self.move_right(x.unwrap_or(1.0));
                                     }
                                     KeynavAction::MoveLeft(x) => {
-                                        info!("Executing MoveLeft action");
+                                        trace!("Executing MoveLeft action");
                                         self.move_left(x.unwrap_or(1.0));
                                     }
                                     KeynavAction::MoveUp(x) => {
-                                        info!("Executing MoveUp action");
+                                        trace!("Executing MoveUp action");
                                         self.move_up(x.unwrap_or(1.0));
                                     }
                                     KeynavAction::MoveDown(x) => {
-                                        info!("Executing MoveDown action");
+                                        trace!("Executing MoveDown action");
                                         self.move_down(x.unwrap_or(1.0));
                                     }
                                     KeynavAction::Click(x) => {
-                                        info!("Executing click action");
+                                        trace!("Executing click action");
                                         self.click(
                                             &virtual_pointer,
                                             x.unwrap_or(MouseButton::Left).to_code(),
                                         );
                                     }
                                     KeynavAction::DragButton(x) => {
-                                        info!("Executing drag button action");
+                                        trace!("Executing drag button action");
                                         self.drag(&virtual_pointer, x.to_code());
                                     }
                                     KeynavAction::DoubleClick(x) => {
-                                        info!("Executing double click action");
+                                        trace!("Executing double click action");
                                         self.double_click(
                                             &virtual_pointer,
                                             x.unwrap_or(MouseButton::Left).to_code(),
                                         );
                                     }
                                     KeynavAction::Warp => {
-                                        info!("Executing warp action");
+                                        trace!("Executing warp action");
                                         self.warp(&virtual_pointer);
                                     }
                                     KeynavAction::End => {
-                                        info!("Executing end action");
+                                        trace!("Executing end action");
                                         self.end();
                                     }
                                 });
                             }
                             None => {
-                                info!("No actions associated with key")
+                                trace!("No actions associated with key")
                             }
                         }
                     }
@@ -640,7 +640,7 @@ pub struct AppRunner {
 }
 impl AppRunner {
     pub fn init(config: RawConfig) -> Result<Self, String> {
-        info!("Connecting to server");
+        trace!("Connecting to server");
         let display = Display::connect_to_env().unwrap();
 
         let mut event_queue = display.create_event_queue();

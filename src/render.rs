@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 
-use log::info;
+use log::trace;
 
 #[derive(Clone)]
 pub struct RenderManager {
@@ -132,7 +132,7 @@ impl RenderManager {
             .cairo_context
             .user_to_device_distance(rect.width, rect.height)
             .unwrap();
-        info!("dx, dy: {}, {}", dx, dy);
+        trace!("dx, dy: {}, {}", dx, dy);
         self.active_region = cairo::Rectangle {
             x: f64::max(0.0, rect.x),
             y: f64::max(0.0, rect.y),
