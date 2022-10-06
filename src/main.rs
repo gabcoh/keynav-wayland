@@ -25,7 +25,7 @@ fn main() {
             .and_then(|path| {
                 File::open(Path::new(&path).join(".config/keynav/keynavrc")).map_err(|err| err.to_string())
             })
-    };                          // 
+    };
 
     let config =
         match file_or_error.as_mut() {
