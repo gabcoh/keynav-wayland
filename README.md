@@ -1,3 +1,5 @@
+# Deprecation
+Shortly after starting this project I discovered https://github.com/rvaiya/warpd and migrated to using it. I highly recommend it!
 # keynav-wayland
 keynav-wayland is an implementation of
 [keynav](https://www.semicomplete.com/projects/keynav/) for wayland!
